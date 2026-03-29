@@ -90,7 +90,7 @@ contract WalletRegistry is IProxyCreationCallback, Ownable {
         uint256 threshold = Safe(walletAddress).getThreshold();
         if (threshold != EXPECTED_THRESHOLD) {
             revert InvalidThreshold(threshold);
-        }
+       }
 
         address[] memory owners = Safe(walletAddress).getOwners();
         if (owners.length != EXPECTED_OWNERS_COUNT) {

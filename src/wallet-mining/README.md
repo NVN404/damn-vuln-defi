@@ -6,6 +6,7 @@ The deployer contract only works with a Safe factory and copy set during deploym
 
 The team transferred 20 million DVT tokens to a user at `0xCe07CF30B540Bb84ceC5dA5547e1cb4722F9E496`, where her plain 1-of-1 Safe was supposed to land. But they lost the nonce they should use for deployment.
 
+
 To make matters worse, there's been rumours of a vulnerability in the system. The team's freaked out. Nobody knows what to do, let alone the user. She granted you access to her private key.
 
 You must save all funds before it's too late!

